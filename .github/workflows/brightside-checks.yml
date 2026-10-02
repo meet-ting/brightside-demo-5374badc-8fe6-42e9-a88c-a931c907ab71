@@ -1,0 +1,38 @@
+name: Brightside checks
+on:
+  pull_request:
+    branches: ['demo/**']
+  push:
+    branches: ['demo/**']
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+      - name: Preview screenshots
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm exec vite preview --configLoader native --host 127.0.0.1 --port 4173 --strictPort &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ > /dev/null && break; sleep 1; done
+          npx -y playwright@1.63.0 install --with-deps chromium
+          npx -y playwright@1.63.0 screenshot --browser chromium --viewport-size "1280,800" --wait-for-timeout 1500 http://127.0.0.1:4173/bristol preview-desktop.png
+          npx -y playwright@1.63.0 screenshot --browser chromium --viewport-size "390,844" --wait-for-timeout 1500 http://127.0.0.1:4173/bristol preview-mobile.png
+      - name: Upload preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview
+          path: preview-*.png
+          retention-days: 14
+          if-no-files-found: error

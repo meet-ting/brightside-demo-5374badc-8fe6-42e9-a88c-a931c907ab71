@@ -1,5 +1,5 @@
 /** Single source of truth for the campaign call to action. Pure, node-inspectable. */
-export const CTA_LABEL = 'Learn more';
+export const CTA_LABEL = 'Book a free consultation';
 export const CTA_PATH = '/consultation';
 export const TEMPLATE_HEADLINE = 'Expert advice for your next home project';
 export const TEMPLATE_SUPPORT =

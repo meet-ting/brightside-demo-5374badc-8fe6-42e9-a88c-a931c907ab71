@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "sessionId": "5374badc-8fe6-42e9-a88c-a931c907ab71",
-  "kind": "baseline",
+  "kind": "patch",
   "approvedCommit": "e173d99d8e798f42e8fa0b626476503e3d0bc62c",
   "approvedDigest": "911007cc0927a7188285e8b8e129f15c6b9b85c42939afd1468eefad490e4032",
-  "sourceFingerprint": "911007cc0927a7188285e8b8e129f15c6b9b85c42939afd1468eefad490e4032",
-  "payloadDigest": "e83ec5cf329c8791c7bcfb29c1874afaa0581f83e570e32106879d987588105e",
+  "sourceFingerprint": "ff6cf00d538b01918ecfb6a9ba687b8a15ef50476bfa7adcc5fda22ee0198e39",
+  "payloadDigest": "ff6cf00d538b01918ecfb6a9ba687b8a15ef50476bfa7adcc5fda22ee0198e39",
   "status": "local-export-not-deployed",
   "files": [
     {
@@ -310,7 +310,7 @@
     },
     {
       "path": "src/lib/cta.ts",
-      "sha256": "e6d83a8fbe35c1c8b04edd9681c8afe1c7dad5700700262cc5d88059a6f491a8"
+      "sha256": "d9d68bed90f5975979dcd6ce692b107e5c9bb5409d06966877f23cbc789aa648"
     },
     {
       "path": "src/lib/locations.ts",
@@ -338,7 +338,7 @@
     },
     {
       "path": "tests/baseline.test.mjs",
-      "sha256": "58131dd8cb94013eac85c693675380bbab393ef0f9307b4d37154b6b8736e332"
+      "sha256": "674575da1a8740d0677039a08cee0ead17ef07f0db63ea902c6efcaf7157e888"
     },
     {
       "path": "tests/export-provenance.test.mjs",

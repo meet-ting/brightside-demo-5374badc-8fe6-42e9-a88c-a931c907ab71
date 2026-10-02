@@ -41,7 +41,7 @@ test('exact twelve unique locations form the approved scope', () => {
   assert.equal(new Set(locations.LOCATIONS.map(l => l.slug)).size, 12);
 });
 test('baseline label and destination are explicit and prefix-safe', () => {
-  assert.equal(cta.CTA_LABEL, 'Learn more');
+  assert.equal(cta.CTA_LABEL, 'Get your free consultation');
   assert.equal(cta.CTA_PATH, '/consultation');
   assert.equal(cta.ctaHrefWithBase('/brightside/', 'bristol'), '/brightside/consultation?location=bristol');
   assert.equal(cta.ctaHrefWithBase('/', 'bath'), '/consultation?location=bath');
@@ -52,7 +52,7 @@ test('every location renders the shared baseline CTA and correct destination', (
     const ctas = html.match(/<a\b[^>]*data-testid="campaign-cta"[^>]*>[\s\S]*?<\/a>/g) || [];
     assert.equal(ctas.length, 2, location.slug);
     for (const anchor of ctas) {
-      assert(anchor.includes('Learn more'), location.slug);
+      assert(anchor.includes('Get your free consultation'), location.slug);
       assert(anchor.includes(`/brightside/consultation?location=${location.slug}`), location.slug);
     }
     assert(html.includes('Expert advice for your next home project'));

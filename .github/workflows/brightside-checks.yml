@@ -1,0 +1,181 @@
+name: Brightside checks
+on:
+  pull_request:
+    branches: ['demo/**']
+  push:
+    branches: ['demo/*/base']
+permissions:
+  contents: read
+jobs:
+  # Each approved merge builds this demo's own site under demos/<id>/. The
+  # shared GitHub Pages site is then re-assembled from every demo's kept site
+  # build, so one demo going live never replaces another demo's live site.
+  build-site:
+    # Publish only an approved merge, never the branch creation that prepares a demo.
+    if: >-
+      github.event_name == 'push' && !github.event.created &&
+      startsWith(github.event.head_commit.message, 'Merge pull request #')
+    runs-on: ubuntu-latest
+    outputs:
+      demo: ${{ steps.demo.outputs.id }}
+      digest: ${{ steps.digest.outputs.value }}
+    steps:
+      - name: Confirm this is the merge of this demo's own reviewed PR
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          change="${GITHUB_REF_NAME%/base}/change"
+          first_line=$(printf '%s' "$MESSAGE" | head -n 1)
+          case "$first_line" in
+            "Merge pull request #"*" from ${GITHUB_REPOSITORY_OWNER}/${change}") echo "Approved merge from $change" ;;
+            *) echo "Not this demo's reviewed merge: $first_line"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+      - id: demo
+        name: This demo's own site address
+        run: |
+          id="${GITHUB_REF_NAME#demo/}"; id="${id%/base}"
+          printf '%s' "$id" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || { echo "Not a demo branch: $GITHUB_REF_NAME"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vite build --configLoader native --base "/${{ github.event.repository.name }}/demos/${{ steps.demo.outputs.id }}/"
+      - name: Give every route its own page
+        run: |
+          for route in locations consultation $(node -e "process.stdout.write(require('./src/data/locations.json').map(l => l.slug).join(' '))"); do
+            mkdir -p "dist/$route" && cp dist/index.html "dist/$route/index.html"
+          done
+      - id: digest
+        run: echo "value=$(node -e "process.stdout.write(require('./dist/brightside-provenance.json').payloadDigest)")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-${{ steps.demo.outputs.id }}
+          path: dist
+          retention-days: 90
+          if-no-files-found: error
+  publish:
+    needs: build-site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    # One publish at a time. If a queued publish is superseded, the newer one
+    # still includes its site, because every finished site build is kept.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-${{ needs.build-site.outputs.demo }}
+          path: _site/demos/${{ needs.build-site.outputs.demo }}
+      - name: Keep every other demo's live site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWN: ${{ needs.build-site.outputs.demo }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false) | select(.name | test("^site-[0-9a-f-]{36}$")) | [.name, (.id | tostring), .workflow_run.head_branch, .created_at] | @tsv' \
+            | sort -t "$(printf '\t')" -k4,4r > sites.tsv
+          while IFS="$(printf '\t')" read -r name id branch created; do
+            demo="${name#site-}"
+            [ "$demo" = "$OWN" ] && continue
+            [ "$branch" = "demo/$demo/base" ] || continue
+            [ -d "_site/demos/$demo" ] && continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > site.zip
+            mkdir -p "_site/demos/$demo" && unzip -q site.zip -d "_site/demos/$demo" && rm site.zip
+            echo "Kept demo $demo (built $created)"
+          done < sites.tsv
+          printf '<!doctype html><meta charset="utf-8"><title>Brightside demos</title><p>Each Brightside demo has its own address under demos/.</p>\n' > _site/index.html
+          cp _site/index.html _site/404.html
+          echo "Publishing $(ls _site/demos | wc -l) demo sites"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+  live:
+    name: Live check
+    needs: [build-site, publish]
+    # Also runs when this publish was superseded by a newer one that includes this demo.
+    if: always() && needs.build-site.result == 'success' && needs.publish.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify this demo's live site and screenshot it
+        env:
+          DEMO: ${{ needs.build-site.outputs.demo }}
+          EXPECTED: ${{ needs.build-site.outputs.digest }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr 'A-Z' 'a-z')
+          SITE="https://${owner}.github.io/${REPO_NAME}/demos/${DEMO}/"
+          [ -n "$EXPECTED" ] || { echo "Missing build digest"; exit 1; }
+          for i in $(seq 1 75); do
+            live=$(curl -sf "${SITE}brightside-provenance.json?v=${GITHUB_SHA}-$i" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).payloadDigest)}catch{}})")
+            [ "$live" = "$EXPECTED" ] && break; sleep 6
+          done
+          [ "$live" = "$EXPECTED" ] || { echo "This demo's live site is not serving this build"; exit 1; }
+          printf '%s' "$SITE" > live-url.txt
+          shot() { npx -y playwright@1.63.0 screenshot --channel chrome --viewport-size "$1" --wait-for-timeout 1500 "$2" "$3"; }
+          curl -sf -o /dev/null "${SITE}bristol/" || { echo "Bristol page is not reachable"; exit 1; }
+          shot "1280,800" "${SITE}bristol/?v=${GITHUB_SHA}" live-desktop.png
+          shot "390,844" "${SITE}bristol/?v=${GITHUB_SHA}" live-mobile.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live
+          path: |
+            live-url.txt
+            live-*.png
+          retention-days: 14
+          if-no-files-found: error
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+      - name: Before and after screenshots
+        run: |
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
+          git worktree add before ${{ github.event.pull_request.base.sha }}
+          ln -s "$PWD/node_modules" before/node_modules
+          (cd before && pnpm exec vite build --configLoader native)
+          pnpm exec vite preview --configLoader native --host 127.0.0.1 --port 4173 --strictPort &
+          (cd before && pnpm exec vite preview --configLoader native --host 127.0.0.1 --port 4174 --strictPort) &
+          for port in 4173 4174; do for i in $(seq 1 30); do curl -sf http://127.0.0.1:$port/ > /dev/null && break; sleep 1; done; done
+          shot() { npx -y playwright@1.63.0 screenshot --channel chrome --viewport-size "$1" --wait-for-timeout 1200 "$2" "$3"; }
+          if ! shot "1280,800" http://127.0.0.1:4173/bristol after-desktop.png; then
+            npx -y playwright@1.63.0 install --with-deps chromium
+            shot() { npx -y playwright@1.63.0 screenshot --browser chromium --viewport-size "$1" --wait-for-timeout 1200 "$2" "$3"; }
+            shot "1280,800" http://127.0.0.1:4173/bristol after-desktop.png
+          fi
+          shot "390,844" http://127.0.0.1:4173/bristol after-mobile.png
+          shot "1280,800" http://127.0.0.1:4174/bristol before-desktop.png
+          shot "390,844" http://127.0.0.1:4174/bristol before-mobile.png
+      - name: Upload preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview
+          path: |
+            before-*.png
+            after-*.png
+          retention-days: 14
+          if-no-files-found: error

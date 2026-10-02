@@ -1,0 +1,101 @@
+name: Brightside checks
+on:
+  pull_request:
+    branches: ['demo/**']
+  push:
+    branches: ['demo/*/base']
+permissions:
+  contents: read
+jobs:
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vite build --configLoader native --base "/${{ github.event.repository.name }}/"
+      - run: cp dist/index.html dist/404.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify the live site and screenshot it
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          expected=$(node -e "process.stdout.write(require('./dist/brightside-provenance.json').payloadDigest)")
+          for i in $(seq 1 30); do
+            live=$(curl -sf "${PAGE_URL}brightside-provenance.json?v=${GITHUB_SHA}" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).payloadDigest)}catch{}})")
+            [ "$live" = "$expected" ] && break; sleep 4
+          done
+          [ "$live" = "$expected" ] || { echo "Live site is not serving this build"; exit 1; }
+          printf '%s' "$PAGE_URL" > live-url.txt
+          shot() { npx -y playwright@1.63.0 screenshot --channel chrome --viewport-size "$1" --wait-for-timeout 1500 "$2" "$3"; }
+          shot "1280,800" "${PAGE_URL}bristol?v=${GITHUB_SHA}" live-desktop.png
+          shot "390,844" "${PAGE_URL}bristol?v=${GITHUB_SHA}" live-mobile.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live
+          path: |
+            live-url.txt
+            live-*.png
+          retention-days: 14
+          if-no-files-found: error
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+      - name: Before and after screenshots
+        run: |
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
+          git worktree add before ${{ github.event.pull_request.base.sha }}
+          ln -s "$PWD/node_modules" before/node_modules
+          (cd before && pnpm exec vite build --configLoader native)
+          pnpm exec vite preview --configLoader native --host 127.0.0.1 --port 4173 --strictPort &
+          (cd before && pnpm exec vite preview --configLoader native --host 127.0.0.1 --port 4174 --strictPort) &
+          for port in 4173 4174; do for i in $(seq 1 30); do curl -sf http://127.0.0.1:$port/ > /dev/null && break; sleep 1; done; done
+          shot() { npx -y playwright@1.63.0 screenshot --channel chrome --viewport-size "$1" --wait-for-timeout 1200 "$2" "$3"; }
+          if ! shot "1280,800" http://127.0.0.1:4173/bristol after-desktop.png; then
+            npx -y playwright@1.63.0 install --with-deps chromium
+            shot() { npx -y playwright@1.63.0 screenshot --browser chromium --viewport-size "$1" --wait-for-timeout 1200 "$2" "$3"; }
+            shot "1280,800" http://127.0.0.1:4173/bristol after-desktop.png
+          fi
+          shot "390,844" http://127.0.0.1:4173/bristol after-mobile.png
+          shot "1280,800" http://127.0.0.1:4174/bristol before-desktop.png
+          shot "390,844" http://127.0.0.1:4174/bristol before-mobile.png
+      - name: Upload preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview
+          path: |
+            before-*.png
+            after-*.png
+          retention-days: 14
+          if-no-files-found: error
